@@ -172,29 +172,17 @@
   }
 
   function attachExpandable(container) {
-    /** Для каждой карточки: если текст длинный — показываем «Читать полностью».
-     *  По клику — разворачиваем/сворачиваем. */
+    /** Показываем «Читать полностью» только для длинных отзывов.
+     *  Сам клик обрабатывается глобальным capture-хэндлером (см. installGlobalClickHandler). */
     const cards = container.querySelectorAll(".aw-review");
     cards.forEach(card => {
       const textEl = card.querySelector(".aw-review__text");
       const btn = card.querySelector(".aw-review__more");
       if (!textEl || !btn) return;
-
-      // Эвристика: если текст длиннее ~180 символов либо содержит >=3 переносов,
-      // его 4-строчный clamp точно обрежет. Эту проверку CSS-метрикой делать
-      // ненадёжно — у line-clamp'а scrollHeight нередко равен clientHeight.
       const t = textEl.textContent || "";
       const lineBreaks = (t.match(/\n/g) || []).length;
       const isLong = t.length > 180 || lineBreaks >= 3;
       if (isLong) btn.hidden = false;
-
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const expanded = textEl.classList.toggle("aw-review__text--expanded");
-        btn.setAttribute("aria-expanded", expanded ? "true" : "false");
-        btn.textContent = expanded ? "Свернуть" : "Читать полностью";
-      });
     });
   }
 
@@ -216,18 +204,8 @@
 
   function attachCarousel(container) {
     const track = container.querySelector(".aw-carousel__track");
-    const prev = container.querySelector(".aw-nav--prev");
-    const next = container.querySelector(".aw-nav--next");
     const bar = container.querySelector(".aw-progress__bar");
-    if (!track || !prev || !next) return;
-
-    function step() {
-      const card = track.querySelector(".aw-review");
-      if (!card) return 320;
-      const style = getComputedStyle(track);
-      const gap = parseFloat(style.columnGap || style.gap || "16");
-      return card.getBoundingClientRect().width + gap;
-    }
+    if (!track) return;
 
     function updateBar() {
       const max = track.scrollWidth - track.clientWidth;
@@ -235,21 +213,72 @@
       const pct = Math.min(100, Math.max(0, (track.scrollLeft / max) * 100));
       bar.style.width = pct + "%";
     }
-
-    function nav(direction) {
-      return (e) => {
-        // Виджет может быть встроен внутри <a> или <form> — гасим всплытие,
-        // чтобы клик по стрелке не вызывал переход/отправку формы.
-        e.preventDefault();
-        e.stopPropagation();
-        track.scrollBy({ left: direction * step(), behavior: "smooth" });
-      };
-    }
-    prev.addEventListener("click", nav(-1));
-    next.addEventListener("click", nav(1));
     track.addEventListener("scroll", updateBar, { passive: true });
     window.addEventListener("resize", updateBar);
     updateBar();
+  }
+
+  function step(track) {
+    const card = track.querySelector(".aw-review");
+    if (!card) return 320;
+    const style = getComputedStyle(track);
+    const gap = parseFloat(style.columnGap || style.gap || "16");
+    return card.getBoundingClientRect().width + gap;
+  }
+
+  // Глобальный capture-обработчик: перехватывает клики по интерактивным элементам
+  // виджета РАНЬШЕ любых родительских обработчиков (даже если родитель — <a> или
+  // ловит клик через document-делегацию / event capture). Это делает виджет
+  // безопасным к встраиванию внутрь любых кликабельных контейнеров на сайте.
+  let globalHandlerInstalled = false;
+  function installGlobalClickHandler() {
+    if (globalHandlerInstalled) return;
+    globalHandlerInstalled = true;
+    document.addEventListener("click", (e) => {
+      const target = e.target;
+      if (!target || !target.closest) return;
+      const interactive = target.closest(".aw-nav, .aw-review__more, .aw-summary__cta");
+      if (!interactive) return;
+
+      // CTA «Оставить отзыв» — ссылка <a>. Гасим всплытие, но переход даём.
+      if (interactive.classList.contains("aw-summary__cta")) {
+        e.stopPropagation();
+        return;
+      }
+
+      // Все кнопки виджета: гасим клик, дальше сами выполняем действие.
+      e.preventDefault();
+      e.stopPropagation();
+      if (typeof e.stopImmediatePropagation === "function") {
+        e.stopImmediatePropagation();
+      }
+
+      const widget = interactive.closest("[data-avito-widget], #avito-reviews-widget");
+      if (!widget) return;
+
+      if (interactive.classList.contains("aw-nav--prev") ||
+          interactive.classList.contains("aw-nav--next")) {
+        const track = widget.querySelector(".aw-carousel__track");
+        if (!track) return;
+        const dir = interactive.classList.contains("aw-nav--prev") ? -1 : 1;
+        const before = track.scrollLeft;
+        track.scrollBy({ left: dir * step(track), behavior: "smooth" });
+        // Fallback: если smooth scroll не сработал (некоторые embed-окружения),
+        // через 50мс делаем instant.
+        setTimeout(() => {
+          if (track.scrollLeft === before) {
+            track.scrollLeft = before + dir * step(track);
+          }
+        }, 50);
+      } else if (interactive.classList.contains("aw-review__more")) {
+        const card = interactive.closest(".aw-review");
+        const textEl = card && card.querySelector(".aw-review__text");
+        if (!textEl) return;
+        const expanded = textEl.classList.toggle("aw-review__text--expanded");
+        interactive.setAttribute("aria-expanded", expanded ? "true" : "false");
+        interactive.textContent = expanded ? "Свернуть" : "Читать полностью";
+      }
+    }, true);  // capture: true — срабатывает раньше bubble-листенеров родителей
   }
 
   function filterReviews(reviews, brandSlug, modelSlug) {
@@ -397,6 +426,7 @@
   }
 
   async function init(container) {
+    installGlobalClickHandler();
     /** Stale-while-revalidate:
      *  1. Если в localStorage есть валидные свежие данные (< TTL) — рендерим из них,
      *     в сеть не ходим. Это решает «не парсить при каждом открытии страницы».
