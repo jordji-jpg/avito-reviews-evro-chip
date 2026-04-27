@@ -1,0 +1,8 @@
+# Локальные служебные файлы — не коммитим
+.DS_Store
+.claude/
+demo.html
+debug_card.txt
+debug_tail.txt
+
+# В репо нужны только: avito-widget.js, avito-widget.css, data/avito-reviews.json, README.md
