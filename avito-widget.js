@@ -189,6 +189,7 @@
       if (isLong) btn.hidden = false;
 
       btn.addEventListener("click", (e) => {
+        e.preventDefault();
         e.stopPropagation();
         const expanded = textEl.classList.toggle("aw-review__text--expanded");
         btn.setAttribute("aria-expanded", expanded ? "true" : "false");
@@ -205,8 +206,8 @@
           ${slides}
         </div>
         <div class="aw-carousel__nav">
-          <button class="aw-nav aw-nav--prev" aria-label="Предыдущий">‹</button>
-          <button class="aw-nav aw-nav--next" aria-label="Следующий">›</button>
+          <button type="button" class="aw-nav aw-nav--prev" aria-label="Предыдущий">‹</button>
+          <button type="button" class="aw-nav aw-nav--next" aria-label="Следующий">›</button>
           <div class="aw-progress"><div class="aw-progress__bar"></div></div>
         </div>
       </div>
@@ -235,8 +236,17 @@
       bar.style.width = pct + "%";
     }
 
-    prev.addEventListener("click", () => track.scrollBy({ left: -step(), behavior: "smooth" }));
-    next.addEventListener("click", () => track.scrollBy({ left: step(), behavior: "smooth" }));
+    function nav(direction) {
+      return (e) => {
+        // Виджет может быть встроен внутри <a> или <form> — гасим всплытие,
+        // чтобы клик по стрелке не вызывал переход/отправку формы.
+        e.preventDefault();
+        e.stopPropagation();
+        track.scrollBy({ left: direction * step(), behavior: "smooth" });
+      };
+    }
+    prev.addEventListener("click", nav(-1));
+    next.addEventListener("click", nav(1));
     track.addEventListener("scroll", updateBar, { passive: true });
     window.addEventListener("resize", updateBar);
     updateBar();
